@@ -1,7 +1,7 @@
 services:
   n8n:
     build:
-      context:.
+      context: .
       dockerfile_inline: |
         FROM n8nio/n8n:latest
         USER root
@@ -21,23 +21,29 @@ services:
         USER node
     command: start
     environment:
-      #... Suas variáveis de ambiente existentes...
+      # Variáveis de ambiente principais do n8n
       - SERVICE_FQDN_N8N_5678
       - 'N8N_EDITOR_BASE_BASE_URL=${SERVICE_FQDN_N8N}'
       - 'WEBHOOK_URL=${SERVICE_FQDN_N8N}'
       - 'N8N_HOST=${SERVICE_URL_N8N}'
       - 'GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-America/Sao_Paulo}'
       - 'TZ=${TZ:-America/Sao_Paulo}'
+      
+      # Configurações do banco de dados PostgreSQL
       - DB_TYPE=postgresdb
       - 'DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-n8n}'
       - 'DB_POSTGRESDB_HOST=${POSTGRES_HOST}'
       - DB_POSTGRESDB_PORT=5432
       - 'DB_POSTGRESDB_USER=${POSTGRES_USER}'
       - 'DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}'
+      
+      # Configurações da fila (Redis/BullMQ)
       - EXECUTIONS_MODE=queue
       - 'QUEUE_BULL_REDIS_HOST=${REDIS_HOST}'
       - 'QUEUE_BULL_REDIS_PASSWORD=${REDIS_PASSWORD}'
       - QUEUE_BULL_REDIS_PORT=6379
+      
+      # Outras configurações do n8n
       - N8N_ENCRYPTION_KEY=$SERVICE_BASE64_N8N
       - N8N_RUNNERS_ENABLED=true
       - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
@@ -50,28 +56,28 @@ services:
       # - N8N_NPM_INSTALL_OPTS='--legacy-peer-deps'
     volumes:
       - 'n8n-data:/home/node/.n8n'
-      - './scripts:/data/scripts' # NOVO: Volume para seus scripts Python
+      - './scripts:/data/scripts'
     healthcheck:
       test:
+        # Verifica se o endpoint 5678 responde, indicando que o n8n está rodando.
+        # O '|| exit 1' garante que se wget falhar (conexão recusada, etc.), o healthcheck falha.
         - CMD-SHELL
-        - 'wget --quiet --output-document=- http://127.0.0.1:5678 |
-
-| exit 1'
+        - 'wget -q http://127.0.0.1:5678 || exit 1'
       interval: 5s
       timeout: 20s
       retries: 10
     deploy:
       resources:
         limits:
+          cpus: '1.5'
+          memory: 2048M
+        reservations:
           cpus: '1'
           memory: 1024M
-        reservations:
-          cpus: '0.5'
-          memory: 512M
-  
+          
   n8n_worker:
     build:
-      context:.
+      context: .
       dockerfile_inline: |
         FROM n8nio/n8n:latest
         USER root
@@ -83,7 +89,7 @@ services:
         USER node
     command: worker
     environment:
-      #... suas variáveis de ambiente...
+      # Variáveis de ambiente comuns aos workers
       - 'GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-America/Sao_Paulo}'
       - 'TZ=${TZ:-America/Sao_Paulo}'
       - DB_TYPE=postgresdb
@@ -106,19 +112,19 @@ services:
       # - N8N_CUSTOM_PACKAGES=[{"name":"@endcycles/n8n-nodes-youtube-transcript"}]
       # - N8N_NPM_INSTALL_OPTS='--legacy-peer-deps'
     volumes:
-      - './scripts:/data/scripts' # NOVO: Volume para seus scripts Python
+      - './scripts:/data/scripts'
     deploy:
       resources:
         limits:
-          cpus: '0.5'
+          cpus: '1'
           memory: 512M
         reservations:
-          cpus: '0.25'
-          memory: 256M
+          cpus: '0.5'
+          memory: 512M
           
   n8n_webhook:
     build:
-      context:.
+      context: .
       dockerfile_inline: |
         FROM n8nio/n8n:latest
         USER root
@@ -130,7 +136,7 @@ services:
         USER node
     command: webhook
     environment:
-      #... suas variáveis de ambiente...
+      # Variáveis de ambiente comuns aos webhooks
       - 'GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-America/Sao_Paulo}'
       - 'TZ=${TZ:-America/Sao_Paulo}'
       - DB_TYPE=postgresdb
@@ -153,15 +159,15 @@ services:
       # - N8N_CUSTOM_PACKAGES=[{"name":"@endcycles/n8n-nodes-youtube-transcript"}]
       # - N8N_NPM_INSTALL_OPTS='--legacy-peer-deps'
     volumes:
-      - './scripts:/data/scripts' # NOVO: Volume para seus scripts Python
+      - './scripts:/data/scripts'
     deploy:
       resources:
         limits:
-          cpus: '0.5'
+          cpus: '1'
           memory: 512M
         reservations:
-          cpus: '0.25'
-          memory: 256M
+          cpus: '0.5'
+          memory: 512M
 
 volumes:
   n8n-data: null
