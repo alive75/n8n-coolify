@@ -48,7 +48,7 @@ services:
       - QUEUE_BULL_REDIS_PORT=6379
       
       # Outras configurações do n8n (SERVICE_BASE64_N8N virá do Coolify)
-      - 'N8N_ENCRYPTION_KEY=${SERVICE_BASE64_N8N}' # Corrigido para usar a sintaxe ${VAR}
+      - 'N8N_ENCRYPTION_KEY=${SERVICE_BASE64_ENCRYPTIONKEY}' # Corrigido para usar a sintaxe ${VAR}
       - N8N_RUNNERS_ENABLED=true
       - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
       - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
