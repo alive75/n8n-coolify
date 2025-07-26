@@ -1,177 +1,107 @@
-services:
-  n8n:
-    build:
-      context: .
-      # Usamos dockerfile_inline para manter tudo no mesmo arquivo,
-      # mas o ideal seria um Dockerfile separado para melhor organização.
-      dockerfile_inline: |
-        FROM n8nio/n8n:latest
-        USER root
-        # Instalar Python, pip, curl e ca-certificates (para Alpine Linux)
-        RUN apk add --no-cache python3 py3-pip curl ca-certificates build-base
-        # Instalar a biblioteca youtube-transcript-api
-        # O --no-cache-dir é útil para evitar problemas com cache corrompido ou antigo.
-        RUN pip install --no-cache-dir youtube-transcript-api
-        
-        # Opcional: Remova a instalação do yt-dlp se não for mais usar o nó da comunidade @endcycles
-        # RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
-        #    && chmod a+rx /usr/local/bin/yt-dlp
-        
-        # Remover arquivos de cache para reduzir o tamanho da imagem
-        RUN rm -rf /var/cache/apk/* /tmp/*
-        
-        # Restaurar para o usuário n8n padrão
-        USER node
-    command: start
-    environment:
-      # Variáveis de ambiente principais do n8n (serão injetadas pelo Coolify no runtime)
-      # SERVICE_FQDN_N8N_5678 é uma variável "mágica" do Coolify.
-      - SERVICE_FQDN_N8N_5678
-      - 'N8N_EDITOR_BASE_BASE_URL=${SERVICE_FQDN_N8N}'
-      - 'WEBHOOK_URL=${SERVICE_FQDN_N8N}'
-      - 'N8N_HOST=${SERVICE_URL_N8N}'
-      - 'GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-America/Sao_Paulo}'
-      - 'TZ=${TZ:-America/Sao_Paulo}'
-      
-      # Configurações do banco de dados PostgreSQL (valores virão do Coolify)
-      - DB_TYPE=postgresdb
-      - 'DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-n8n}'
-      - 'DB_POSTGRESDB_HOST=${POSTGRES_HOST}'
-      - DB_POSTGRESDB_PORT=5432
-      - 'DB_POSTGRESDB_USER=${POSTGRES_USER}'
-      - 'DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}'
-      
-      # Configurações da fila (Redis/BullMQ) (valores virão do Coolify)
-      - EXECUTIONS_MODE=queue
-      - 'QUEUE_BULL_REDIS_HOST=${REDIS_HOST}'
-      - 'QUEUE_BULL_REDIS_PASSWORD=${REDIS_PASSWORD}'
-      - QUEUE_BULL_REDIS_PORT=6379
-      
-      # Outras configurações do n8n (SERVICE_BASE64_N8N virá do Coolify)
-      - 'N8N_ENCRYPTION_KEY=${SERVICE_BASE64_ENCRYPTIONKEY}' # Corrigido para usar a sintaxe ${VAR}
-      - N8N_RUNNERS_ENABLED=true
-      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
-      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
-      - N8N_COMMUNITY_PACKAGES_ENABLED=true
-      - NODE_OPTIONS=--max_old_space_size=2048
+# documentation: https://n8n.io
+# slogan: n8n is an extendable workflow automation tool.
+# tags: n8n,workflow,automation,open,source,low,code
+# logo: svgs/n8n.png
+# port: ${N8N_PORT:-5678}
 
-      # Opcional: Remova ou comente estas linhas se não for mais usar o nó da comunidade @endcycles
-      # - N8N_CUSTOM_PACKAGES=[{"name":"@endcycles/n8n-nodes-youtube-transcript"}]
-      # - N8N_NPM_INSTALL_OPTS='--legacy-peer-deps'
+version: "3.8"
+
+volumes:
+  db_storage:
+  n8n_storage:
+  redis_storage:
+
+services:
+  # ------------------------------------------------------------------ #
+  # PostgreSQL                                                         #
+  # ------------------------------------------------------------------ #
+  postgres:
+    image: postgres:16-alpine
     volumes:
-      - 'n8n-data:/home/node/.n8n'
-      - './scripts:/data/scripts'
+      - postgresql-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=$SERVICE_USER_POSTGRES
+      - POSTGRES_PASSWORD=$SERVICE_PASSWORD_POSTGRES
+      - POSTGRES_DB=${POSTGRES_DB:-n8n}
     healthcheck:
-      test:
-        # Verifica se o endpoint 5678 responde, indicando que o n8n está rodando.
-        # O '|| exit 1' garante que se wget falhar (conexão recusada, etc.), o healthcheck falha.
-        - CMD-SHELL
-        - 'wget -q http://127.0.0.1:5678 || exit 1'
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 20s
       retries: 10
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 1024M
-        reservations:
-          cpus: '0.5'
-          memory: 512M
-          
-  n8n_worker:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM n8nio/n8n:latest
-        USER root
-        RUN apk add --no-cache python3 py3-pip curl ca-certificates build-base
-        RUN pip install --no-cache-dir youtube-transcript-api
-        # RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
-        #    && chmod a+rx /usr/local/bin/yt-dlp
-        RUN rm -rf /var/cache/apk/* /tmp/*
-        USER node
+
+  # ------------------------------------------------------------------ #
+  # **Redis – Bitnami build with env-driven credentials**              #
+  # ------------------------------------------------------------------ #
+  redis:
+    image: bitnami/redis:7.2
+    restart: always
+    environment:
+      - ALLOW_EMPTY_PASSWORD=no
+      - REDIS_USERNAME=${REDIS_USERNAME:-default}      # optional
+      - REDIS_PASSWORD=${SERVICE_PASSWORD_REDIS:-redis_password}  # fallback to a default password
+    volumes:
+      - redis_storage:/bitnami/redis/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$SERVICE_PASSWORD_REDIS\" ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ------------------------------------------------------------------ #
+  # n8n main instance                                                  #
+  # ------------------------------------------------------------------ #
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    restart: always
+    ports:
+      - "${N8N_PORT}:5678"
+    environment:
+      - N8N_PORT=${N8N_PORT:-5678}
+      - SERVICE_FQDN_N8N_5678
+      - N8N_EDITOR_BASE_URL=${SERVICE_FQDN_N8N}
+      - WEBHOOK_URL=${SERVICE_FQDN_N8N}
+      - N8N_HOST=${SERVICE_URL_N8N}
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-n8n}
+      - DB_POSTGRESDB_USER=${SERVICE_USER_POSTGRES:-n8n}
+      - DB_POSTGRESDB_PASSWORD=${SERVICE_PASSWORD_POSTGRES:-n8n}
+      - EXECUTIONS_MODE=queue
+      - QUEUE_BULL_REDIS_HOST=redis
+      - QUEUE_BULL_REDIS_PORT=6379
+      - QUEUE_BULL_REDIS_PASSWORD=${SERVICE_PASSWORD_REDIS}
+      - QUEUE_HEALTH_CHECK_ACTIVE=true
+      - N8N_ENCRYPTION_KEY=${SERVICE_BASE64_ENCRYPTIONKEY}
+    volumes:
+      - n8n_storage:/home/node/.n8n
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  # ------------------------------------------------------------------ #
+  # n8n worker (same Redis creds)                                      #
+  # ------------------------------------------------------------------ #
+  n8n-worker:
+    image: docker.n8n.io/n8nio/n8n
+    restart: always
     command: worker
     environment:
-      # Variáveis de ambiente comuns aos workers (valores virão do Coolify)
-      - 'GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-America/Sao_Paulo}'
-      - 'TZ=${TZ:-America/Sao_Paulo}'
       - DB_TYPE=postgresdb
-      - 'DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-n8n}'
-      - 'DB_POSTGRESDB_HOST=${POSTRES_HOST}'
+      - DB_POSTGRESDB_HOST=postgres
       - DB_POSTGRESDB_PORT=5432
-      - 'DB_POSTGRESDB_USER=${POSTGRES_USER}'
-      - 'DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}'
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-n8n}
+      - DB_POSTGRESDB_USER=${SERVICE_USER_POSTGRES:-n8n}
+      - DB_POSTGRESDB_PASSWORD=${SERVICE_PASSWORD_POSTGRES:-n8n}
       - EXECUTIONS_MODE=queue
-      - 'QUEUE_BULL_REDIS_HOST=${REDIS_HOST}'
-      - 'QUEUE_BULL_REDIS_PASSWORD=${REDIS_PASSWORD}'
+      - QUEUE_BULL_REDIS_HOST=redis
       - QUEUE_BULL_REDIS_PORT=6379
-      - 'N8N_ENCRYPTION_KEY=${SERVICE_BASE64_ENCRYPTIONKEY}' # Corrigido para usar a sintaxe ${VAR}
-      - N8N_RUNNERS_ENABLED=true
-      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
-      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
-      - N8N_COMMUNITY_PACKAGES_ENABLED=true
-      - NODE_OPTIONS=--max_old_space_size=2048
-      # Opcional: Remova ou comente estas linhas
-      # - N8N_CUSTOM_PACKAGES=[{"name":"@endcycles/n8n-nodes-youtube-transcript"}]
-      # - N8N_NPM_INSTALL_OPTS='--legacy-peer-deps'
+      - QUEUE_BULL_REDIS_PASSWORD=${SERVICE_PASSWORD_REDIS}
+      - QUEUE_HEALTH_CHECK_ACTIVE=true
+      - N8N_ENCRYPTION_KEY=${SERVICE_BASE64_ENCRYPTIONKEY}
     volumes:
-      - './scripts:/data/scripts'
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-          
-  n8n_webhook:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM n8nio/n8n:latest
-        USER root
-        RUN apk add --no-cache python3 py3-pip curl ca-certificates build-base
-        RUN pip install --no-cache-dir youtube-transcript-api
-        # RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
-        #    && chmod a+rx /usr/local/bin/yt-dlp
-        RUN rm -rf /var/cache/apk/* /tmp/*
-        USER node
-    command: webhook
-    environment:
-      # Variáveis de ambiente comuns aos webhooks (valores virão do Coolify)
-      - 'GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-America/Sao_Paulo}'
-      - 'TZ=${TZ:-America/Sao_Paulo}'
-      - DB_TYPE=postgresdb
-      - 'DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-n8n}'
-      - 'DB_POSTGRESDB_HOST=${POSTGRES_HOST}'
-      - DB_POSTGRESDB_PORT=5432
-      - 'DB_POSTGRESDB_USER=${POSTGRES_USER}'
-      - 'DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}'
-      - EXECUTIONS_MODE=queue
-      - 'QUEUE_BULL_REDIS_HOST=${REDIS_HOST}'
-      - 'QUEUE_BULL_REDIS_PASSWORD=${REDIS_PASSWORD}'
-      - QUEUE_BULL_REDIS_PORT=6379
-      - 'N8N_ENCRYPTION_KEY=${SERVICE_BASE64_ENCRYPTIONKEY}' # Corrigido para usar a sintaxe ${VAR}
-      - N8N_RUNNERS_ENABLED=true
-      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
-      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
-      - N8N_COMMUNITY_PACKAGES_ENABLED=true
-      - NODE_OPTIONS=--max_old_space_size=2048
-      # Opcional: Remova ou comente estas linhas
-      # - N8N_CUSTOM_PACKAGES=[{"name":"@endcycles/n8n-nodes-youtube-transcript"}]
-      # - N8N_NPM_INSTALL_OPTS='--legacy-peer-deps'
-    volumes:
-      - './scripts:/data/scripts'
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-
-volumes:
-  n8n-data: null
+      - n8n_storage:/home/node/.n8n
+    depends_on:
+      - n8n
