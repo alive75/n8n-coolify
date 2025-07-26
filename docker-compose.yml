@@ -2,26 +2,30 @@ services:
   n8n:
     build:
       context: .
+      # Usamos dockerfile_inline para manter tudo no mesmo arquivo,
+      # mas o ideal seria um Dockerfile separado para melhor organização.
       dockerfile_inline: |
         FROM n8nio/n8n:latest
         USER root
         # Instalar Python, pip, curl e ca-certificates (para Alpine Linux)
-        RUN apk add --no-cache python3 py3-pip curl ca-certificates
+        RUN apk add --no-cache python3 py3-pip curl ca-certificates build-base
         # Instalar a biblioteca youtube-transcript-api
-        RUN pip install youtube-transcript-api
+        # O --no-cache-dir é útil para evitar problemas com cache corrompido ou antigo.
+        RUN pip install --no-cache-dir youtube-transcript-api
         
-        # Opcional: Remover a instalação do yt-dlp se não for mais usar o nó da comunidade @endcycles
+        # Opcional: Remova a instalação do yt-dlp se não for mais usar o nó da comunidade @endcycles
         # RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
         #    && chmod a+rx /usr/local/bin/yt-dlp
         
         # Remover arquivos de cache para reduzir o tamanho da imagem
-        RUN rm -rf /var/cache/apk/*
+        RUN rm -rf /var/cache/apk/* /tmp/*
         
         # Restaurar para o usuário n8n padrão
         USER node
     command: start
     environment:
-      # Variáveis de ambiente principais do n8n
+      # Variáveis de ambiente principais do n8n (serão injetadas pelo Coolify no runtime)
+      # SERVICE_FQDN_N8N_5678 é uma variável "mágica" do Coolify.
       - SERVICE_FQDN_N8N_5678
       - 'N8N_EDITOR_BASE_BASE_URL=${SERVICE_FQDN_N8N}'
       - 'WEBHOOK_URL=${SERVICE_FQDN_N8N}'
@@ -29,7 +33,7 @@ services:
       - 'GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-America/Sao_Paulo}'
       - 'TZ=${TZ:-America/Sao_Paulo}'
       
-      # Configurações do banco de dados PostgreSQL
+      # Configurações do banco de dados PostgreSQL (valores virão do Coolify)
       - DB_TYPE=postgresdb
       - 'DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-n8n}'
       - 'DB_POSTGRESDB_HOST=${POSTGRES_HOST}'
@@ -37,14 +41,14 @@ services:
       - 'DB_POSTGRESDB_USER=${POSTGRES_USER}'
       - 'DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}'
       
-      # Configurações da fila (Redis/BullMQ)
+      # Configurações da fila (Redis/BullMQ) (valores virão do Coolify)
       - EXECUTIONS_MODE=queue
       - 'QUEUE_BULL_REDIS_HOST=${REDIS_HOST}'
       - 'QUEUE_BULL_REDIS_PASSWORD=${REDIS_PASSWORD}'
       - QUEUE_BULL_REDIS_PORT=6379
       
-      # Outras configurações do n8n
-      - N8N_ENCRYPTION_KEY=$SERVICE_BASE64_N8N
+      # Outras configurações do n8n (SERVICE_BASE64_N8N virá do Coolify)
+      - 'N8N_ENCRYPTION_KEY=${SERVICE_BASE64_N8N}' # Corrigido para usar a sintaxe ${VAR}
       - N8N_RUNNERS_ENABLED=true
       - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
       - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
@@ -69,11 +73,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.5'
-          memory: 2048M
-        reservations:
           cpus: '1'
           memory: 1024M
+        reservations:
+          cpus: '0.5'
+          memory: 512M
           
   n8n_worker:
     build:
@@ -81,20 +85,20 @@ services:
       dockerfile_inline: |
         FROM n8nio/n8n:latest
         USER root
-        RUN apk add --no-cache python3 py3-pip curl ca-certificates
-        RUN pip install youtube-transcript-api
+        RUN apk add --no-cache python3 py3-pip curl ca-certificates build-base
+        RUN pip install --no-cache-dir youtube-transcript-api
         # RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
         #    && chmod a+rx /usr/local/bin/yt-dlp
-        RUN rm -rf /var/cache/apk/*
+        RUN rm -rf /var/cache/apk/* /tmp/*
         USER node
     command: worker
     environment:
-      # Variáveis de ambiente comuns aos workers
+      # Variáveis de ambiente comuns aos workers (valores virão do Coolify)
       - 'GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-America/Sao_Paulo}'
       - 'TZ=${TZ:-America/Sao_Paulo}'
       - DB_TYPE=postgresdb
       - 'DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-n8n}'
-      - 'DB_POSTGRESDB_HOST=${POSTGRES_HOST}'
+      - 'DB_POSTGRESDB_HOST=${POSTRES_HOST}'
       - DB_POSTGRESDB_PORT=5432
       - 'DB_POSTGRESDB_USER=${POSTGRES_USER}'
       - 'DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}'
@@ -102,7 +106,7 @@ services:
       - 'QUEUE_BULL_REDIS_HOST=${REDIS_HOST}'
       - 'QUEUE_BULL_REDIS_PASSWORD=${REDIS_PASSWORD}'
       - QUEUE_BULL_REDIS_PORT=6379
-      - N8N_ENCRYPTION_KEY=$SERVICE_BASE64_N8N
+      - 'N8N_ENCRYPTION_KEY=${SERVICE_BASE64_N8N}' # Corrigido para usar a sintaxe ${VAR}
       - N8N_RUNNERS_ENABLED=true
       - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
       - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
@@ -116,11 +120,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1'
-          memory: 512M
-        reservations:
           cpus: '0.5'
           memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
           
   n8n_webhook:
     build:
@@ -128,15 +132,15 @@ services:
       dockerfile_inline: |
         FROM n8nio/n8n:latest
         USER root
-        RUN apk add --no-cache python3 py3-pip curl ca-certificates
-        RUN pip install youtube-transcript-api
+        RUN apk add --no-cache python3 py3-pip curl ca-certificates build-base
+        RUN pip install --no-cache-dir youtube-transcript-api
         # RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
         #    && chmod a+rx /usr/local/bin/yt-dlp
-        RUN rm -rf /var/cache/apk/*
+        RUN rm -rf /var/cache/apk/* /tmp/*
         USER node
     command: webhook
     environment:
-      # Variáveis de ambiente comuns aos webhooks
+      # Variáveis de ambiente comuns aos webhooks (valores virão do Coolify)
       - 'GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-America/Sao_Paulo}'
       - 'TZ=${TZ:-America/Sao_Paulo}'
       - DB_TYPE=postgresdb
@@ -149,7 +153,7 @@ services:
       - 'QUEUE_BULL_REDIS_HOST=${REDIS_HOST}'
       - 'QUEUE_BULL_REDIS_PASSWORD=${REDIS_PASSWORD}'
       - QUEUE_BULL_REDIS_PORT=6379
-      - N8N_ENCRYPTION_KEY=$SERVICE_BASE64_N8N
+      - 'N8N_ENCRYPTION_KEY=${SERVICE_BASE64_N8N}' # Corrigido para usar a sintaxe ${VAR}
       - N8N_RUNNERS_ENABLED=true
       - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
       - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
@@ -163,11 +167,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1'
-          memory: 512M
-        reservations:
           cpus: '0.5'
           memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
 
 volumes:
   n8n-data: null
